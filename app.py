@@ -82,72 +82,99 @@ class PowerOSINTFinder:
 
     # -------- Main Recon --------
     def run(self, target, hunter_api=None):
-        core, domain = self.clean_input(target)
+    core, domain = self.clean_input(target)
 
-        queries = [
-            f'"{core}" CEO',
-            f'"{core}" founder',
-            f'"{core}" leadership team',
-            f'"{core}" site:linkedin.com/in',
+    # 🔥 ADVANCED DORKS (LinkedIn + leadership + emails)
+    queries = [
+        # LinkedIn (primary for people)
+        f'site:linkedin.com/in "{core}"',
+        f'site:linkedin.com/in "{core}" (CEO OR Founder OR Director)',
+        f'site:linkedin.com/in "{core}" ("works at" OR "employee")',
+
+        # Leadership
+        f'"{core}" CEO',
+        f'"{core}" founder',
+        f'"{core}" "leadership team"',
+        f'"{core}" "management team"',
+
+        # Email discovery
+        f'"{core}" contact email',
+        f'"{core}" "@{core}.com"',
+    ]
+
+    if domain:
+        queries += [
+            # Website-specific
+            f'site:{domain} "team"',
+            f'site:{domain} "about"',
+            f'site:{domain} email',
+
+            # Domain-based dorks
+            f'"@{domain}"',
+            f'"{domain}" CEO',
+            f'"{domain}" founder',
         ]
 
-        if domain:
-            queries += [
-                f'site:{domain} "team"',
-                f'site:{domain} "about"',
-                f'"{domain}" CEO',
-                f'"{domain}" founder',
-            ]
+    leaders, emails, results = [], [], []
 
-        leaders, emails, results = [], [], []
+    for q in queries:
+        try:
+            search_results = list(self.ddgs.text(q, max_results=10))
 
-        for q in queries:
-            try:
-                search_results = list(self.ddgs.text(q, max_results=8))
+            for r in search_results:
+                link = r["href"].lower()
+                title = r["title"]
+                body = r["body"]
+                full_text = (title + " " + body).lower()
 
-                for r in search_results:
-                    link = r["href"].lower()
-                    title = r["title"]
-                    body = r["body"]
-
-                    # STRICT DOMAIN FILTER
-                    if domain and domain not in link:
+                # 🔥 SMART FILTERING (THIS IS THE REAL FIX)
+                if "linkedin.com/in" in link:
+                    # Allow LinkedIn if company name is present
+                    if core not in full_text:
+                        continue
+                elif domain:
+                    # Strict for website
+                    if domain not in link:
+                        continue
+                else:
+                    # fallback
+                    if core not in full_text:
                         continue
 
-                    results.append({
-                        "Title": title,
+                results.append({
+                    "Title": title,
+                    "Link": r["href"]
+                })
+
+                # Emails
+                found_emails = self.extract_emails(full_text, domain)
+                for e in found_emails:
+                    emails.append({"Email": e, "Source": "Search"})
+
+                # Names
+                name = self.extract_name(title, link)
+                if name:
+                    leaders.append({
+                        "Name": name,
+                        "Source": "LinkedIn",
                         "Link": r["href"]
                     })
 
-                    # Extract emails
-                    emails.extend(
-                        [{"Email": e, "Source": "Search"} for e in self.extract_emails(title + body, domain)]
-                    )
+            time.sleep(1)
 
-                    # Extract names
-                    name = self.extract_name(title, link)
-                    if name:
-                        leaders.append({
-                            "Name": name,
-                            "Source": "LinkedIn",
-                            "Link": r["href"]
-                        })
+        except:
+            continue
 
-                time.sleep(1)
+    # 🔥 API ENRICHMENT
+    if domain:
+        emails.extend(self.get_hunter_emails(domain, hunter_api))
 
-            except:
-                continue
+    # Deduplicate
+    leaders_df = pd.DataFrame(leaders).drop_duplicates(subset=["Name"]) if leaders else pd.DataFrame()
+    emails_df = pd.DataFrame(emails).drop_duplicates(subset=["Email"]) if emails else pd.DataFrame()
+    results_df = pd.DataFrame(results).drop_duplicates(subset=["Link"]) if results else pd.DataFrame()
 
-        # API ENRICHMENT
-        if domain:
-            emails.extend(self.get_hunter_emails(domain, hunter_api))
-
-        # Deduplicate
-        leaders_df = pd.DataFrame(leaders).drop_duplicates(subset=["Name"]) if leaders else pd.DataFrame()
-        emails_df = pd.DataFrame(emails).drop_duplicates(subset=["Email"]) if emails else pd.DataFrame()
-        results_df = pd.DataFrame(results).drop_duplicates(subset=["Link"]) if results else pd.DataFrame()
-
-        return leaders_df, emails_df, results_df
+    return leaders_df, emails_df, results_df
 
 
 # ================= UI =================
