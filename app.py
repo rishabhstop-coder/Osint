@@ -148,7 +148,7 @@ class PowerOSINTFinder:
                         ]
 
                     if not any(src in link for src in allowed_sources):
-                    continue
+                        continue
 
                     else:
                         if core not in combined:
