@@ -3,7 +3,7 @@ import time
 import requests
 import pandas as pd
 import streamlit as st
-from duckduckgo_search import DDGS
+
 
 class APIOSINTFramework:
     def __init__(self):
