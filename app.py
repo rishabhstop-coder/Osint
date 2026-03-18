@@ -81,7 +81,7 @@ class PowerOSINTFinder:
             return []
 
     # -------- Main Recon --------
-    def run(self, target, hunter_api=None):
+        def run(self, target, hunter_api=None):
     core, domain = self.clean_input(target)
 
     # 🔥 ADVANCED DORKS (LinkedIn + leadership + emails)
