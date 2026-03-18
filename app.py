@@ -1,142 +1,187 @@
 import time
 import re
+import requests
 import pandas as pd
 import streamlit as st
 from urllib.parse import urlparse
 from ddgs import DDGS
 
 
+# ================= CORE ENGINE =================
 class PowerOSINTFinder:
     def __init__(self):
         self.ddgs = DDGS()
 
+    # -------- Input Cleaning --------
     def clean_input(self, user_input):
         user_input = user_input.strip()
 
-        if user_input.lower().startswith(('http://', 'https://')):
+        if user_input.startswith(('http://', 'https://')):
             domain = urlparse(user_input).netloc
         else:
             domain = user_input.split('/')[0]
 
-        domain = re.sub(r'^https?://', '', domain).split('/')[0].strip().lower()
+        domain = domain.replace("www.", "").lower()
 
-        if '.' in domain and ' ' not in domain:
-            website = domain
-            core_name = domain.split('.')[0].replace('www.', '')
+        if "." in domain:
+            return domain.split('.')[0], domain
         else:
-            website = None
-            core_name = user_input.lower()
+            return user_input.lower(), None
 
-        return core_name, website
+    # -------- Validation --------
+    def is_valid_name(self, name):
+        if not name:
+            return False
 
-    def extract_emails(self, text, domain_part):
-        pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-        emails = re.findall(pattern, text)
+        words = name.split()
 
-        relevant = []
-        domain_lower = domain_part.lower() if domain_part else ''
+        if len(words) < 2 or len(words) > 4:
+            return False
 
-        for email in emails:
-            if domain_lower and domain_lower in email.lower():
-                relevant.append(email)
-            else:
-                relevant.append(email)
-
-        return list(set(relevant))
-
-    def extract_potential_names(self, title, link):
-        if 'linkedin.com/in' in link.lower():
-            name_part = title.split('|')[0].split(' - ')[0].strip()
-
-            if 2 <= len(name_part.split()) <= 4:
-                return name_part
-
-        return None
-
-    def execute_recon(self, target):
-        core_name, website = self.clean_input(target)
-
-        queries = [
-            f'"{core_name}" (CEO OR Founder OR President OR Director) site:linkedin.com/in/',
-            f'"{core_name}" (CEO OR Founder OR Owner OR Director)',
-            f'"{core_name}" (CFO OR CTO OR CMO)',
-            f'who is the CEO of {core_name}',
-            f'"{core_name}" leadership team',
+        blacklist = [
+            "linkedin", "profile", "company",
+            "team", "jobs", "hiring",
+            "about", "contact", "activities"
         ]
 
-        if website:
-            queries.extend([
-                f'site:{website} ("About Us" OR "Team" OR "Leadership")',
-                f'site:{website} (email OR contact)',
-            ])
+        return not any(b in name.lower() for b in blacklist)
 
-        results_list = []
-        emails_list = []
-        leaders = []
+    # -------- Email Extraction --------
+    def extract_emails(self, text, domain):
+        pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        found = re.findall(pattern, text)
+
+        if not domain:
+            return []
+
+        return list(set([e for e in found if domain in e.lower()]))
+
+    # -------- Name Extraction --------
+    def extract_name(self, title, link):
+        if "linkedin.com/in" not in link.lower():
+            return None
+
+        name = title.split("|")[0].split("-")[0].strip()
+
+        return name if self.is_valid_name(name) else None
+
+    # -------- Hunter API (optional) --------
+    def get_hunter_emails(self, domain, api_key=None):
+        if not api_key:
+            return []
+
+        try:
+            url = f"https://api.hunter.io/v2/domain-search?domain={domain}&api_key={api_key}"
+            res = requests.get(url, timeout=5).json()
+
+            emails = res.get("data", {}).get("emails", [])
+
+            return [{"Email": e["value"], "Source": "Hunter"} for e in emails]
+        except:
+            return []
+
+    # -------- Main Recon --------
+    def run(self, target, hunter_api=None):
+        core, domain = self.clean_input(target)
+
+        queries = [
+            f'"{core}" CEO',
+            f'"{core}" founder',
+            f'"{core}" leadership team',
+            f'"{core}" site:linkedin.com/in',
+        ]
+
+        if domain:
+            queries += [
+                f'site:{domain} "team"',
+                f'site:{domain} "about"',
+                f'"{domain}" CEO',
+                f'"{domain}" founder',
+            ]
+
+        leaders, emails, results = [], [], []
 
         for q in queries:
             try:
-                results = list(self.ddgs.text(q, max_results=8))
+                search_results = list(self.ddgs.text(q, max_results=8))
 
-                for r in results:
-                    full_text = r['title'] + " " + r['body']
-                    full_lower = full_text.lower()
+                for r in search_results:
+                    link = r["href"].lower()
+                    title = r["title"]
+                    body = r["body"]
 
-                    if core_name in full_lower or (website and website in full_lower):
-                        results_list.append({
-                            'Title': r['title'],
-                            'Link': r['href']
+                    # STRICT DOMAIN FILTER
+                    if domain and domain not in link:
+                        continue
+
+                    results.append({
+                        "Title": title,
+                        "Link": r["href"]
+                    })
+
+                    # Extract emails
+                    emails.extend(
+                        [{"Email": e, "Source": "Search"} for e in self.extract_emails(title + body, domain)]
+                    )
+
+                    # Extract names
+                    name = self.extract_name(title, link)
+                    if name:
+                        leaders.append({
+                            "Name": name,
+                            "Source": "LinkedIn",
+                            "Link": r["href"]
                         })
-
-                        # Emails
-                        emails = self.extract_emails(full_text, website or core_name)
-                        for e in emails:
-                            emails_list.append({'Email': e, 'Link': r['href']})
-
-                        # Names
-                        name = self.extract_potential_names(r['title'], r['href'])
-                        if name:
-                            leaders.append({'Name': name, 'Link': r['href']})
 
                 time.sleep(1)
 
             except:
                 continue
 
-        leaders_df = pd.DataFrame(leaders).drop_duplicates() if leaders else pd.DataFrame()
-        emails_df = pd.DataFrame(emails_list).drop_duplicates() if emails_list else pd.DataFrame()
-        general_df = pd.DataFrame(results_list).drop_duplicates() if results_list else pd.DataFrame()
+        # API ENRICHMENT
+        if domain:
+            emails.extend(self.get_hunter_emails(domain, hunter_api))
 
-        return leaders_df, emails_df, general_df
+        # Deduplicate
+        leaders_df = pd.DataFrame(leaders).drop_duplicates(subset=["Name"]) if leaders else pd.DataFrame()
+        emails_df = pd.DataFrame(emails).drop_duplicates(subset=["Email"]) if emails else pd.DataFrame()
+        results_df = pd.DataFrame(results).drop_duplicates(subset=["Link"]) if results else pd.DataFrame()
+
+        return leaders_df, emails_df, results_df
 
 
 # ================= UI =================
-st.set_page_config(page_title="OSINT Finder", layout="wide")
+st.set_page_config(page_title="OSINT Power Finder", layout="wide")
 
 st.title("🔎 OSINT Power Finder")
 
 target = st.text_input("Enter Company or Domain")
 
-if st.button("Run Scan"):
-    if target:
-        with st.spinner("Scanning..."):
-            recon = PowerOSINTFinder()
-            people_df, emails_df, general_df = recon.execute_recon(target)
+hunter_key = st.text_input("Hunter API Key (optional)", type="password")
 
-        if people_df.empty and emails_df.empty and general_df.empty:
-            st.warning("No data found")
+if st.button("Run Scan"):
+    if not target:
+        st.error("Enter a target")
+    else:
+        with st.spinner("Running OSINT scan..."):
+            engine = PowerOSINTFinder()
+            people, emails, results = engine.run(target, hunter_key)
+
+        if people.empty and emails.empty and results.empty:
+            st.warning("No strong matches found")
         else:
             tab1, tab2, tab3 = st.tabs(["Leaders", "Emails", "Results"])
 
             with tab1:
-                st.dataframe(people_df, use_container_width=True)
+                st.subheader("Leadership")
+                st.dataframe(people, use_container_width=True)
 
             with tab2:
-                st.dataframe(emails_df, use_container_width=True)
+                st.subheader("Emails")
+                st.dataframe(emails, use_container_width=True)
 
             with tab3:
-                st.dataframe(general_df, use_container_width=True)
+                st.subheader("Search Results")
+                st.dataframe(results, use_container_width=True)
 
             st.success("Scan complete")
-    else:
-        st.error("Enter a target")
