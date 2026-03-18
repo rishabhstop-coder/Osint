@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import streamlit as st
 from urllib.parse import urlparse
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 class PowerOSINTFinder:
     def __init__(self):
