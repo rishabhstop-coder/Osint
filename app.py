@@ -12,24 +12,23 @@ class PowerOSINTFinder:
     def __init__(self):
         self.ddgs = DDGS()
 
-    # -------- Input Cleaning --------
+    # -------- INPUT CLEANING --------
     def clean_input(self, user_input):
         user_input = user_input.strip()
 
-        if user_input.startswith(('http://', 'https://')):
+        if user_input.startswith(("http://", "https://")):
             domain = urlparse(user_input).netloc
         else:
-            domain = user_input.split('/')[0]
+            domain = user_input.split("/")[0]
 
         domain = domain.replace("www.", "").lower()
 
         if "." in domain:
-            core = domain.split('.')[0]
+            core = domain.split(".")[0]
             return core, domain
-        else:
-            return user_input.lower(), None
+        return user_input.lower(), None
 
-    # -------- Name Validation --------
+    # -------- NAME VALIDATION --------
     def is_valid_name(self, name):
         if not name:
             return False
@@ -39,16 +38,12 @@ class PowerOSINTFinder:
         if len(words) < 2 or len(words) > 4:
             return False
 
-        blacklist = [
-            "linkedin", "profile", "company", "team",
-            "jobs", "hiring", "about", "contact"
-        ]
-
+        blacklist = ["linkedin", "profile", "team", "jobs", "about", "contact"]
         return not any(b in name.lower() for b in blacklist)
 
-    # -------- Email Extraction --------
+    # -------- EMAIL EXTRACTION --------
     def extract_emails(self, text, domain):
-        pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
         found = re.findall(pattern, text)
 
         if not domain:
@@ -56,16 +51,15 @@ class PowerOSINTFinder:
 
         return list(set([e for e in found if domain in e.lower()]))
 
-    # -------- Name Extraction --------
+    # -------- NAME EXTRACTION --------
     def extract_name(self, title, link):
         if "linkedin.com/in" not in link:
             return None
 
         name = title.split("|")[0].split("-")[0].strip()
-
         return name if self.is_valid_name(name) else None
 
-    # -------- Hunter API --------
+    # -------- HUNTER API --------
     def get_hunter_emails(self, domain, api_key=None):
         if not api_key:
             return []
@@ -85,31 +79,28 @@ class PowerOSINTFinder:
     def run(self, target, hunter_api=None):
         core, domain = self.clean_input(target)
 
-        # 🔥 SMART QUERIES
+        # 🔥 DECISION-MAKER FOCUSED QUERIES
         queries = [
-            # LinkedIn (strong signals)
-            f'site:linkedin.com/in "{core}" "works at"',
-            f'site:linkedin.com/in "{core}" "company"',
             f'site:linkedin.com/in "{core}" CEO',
             f'site:linkedin.com/in "{core}" founder',
+            f'site:linkedin.com/in "{core}" owner',
+            f'site:linkedin.com/in "{core}" director',
+            f'site:linkedin.com/in "{core}" dentist',
 
-            # Leadership
             f'"{core}" CEO',
             f'"{core}" founder',
-            f'"{core}" "leadership team"',
-            f'"{core}" "management team"',
+            f'"{core}" owner',
+            f'"{core}" director',
+            f'"{core}" dentist',
 
-            # Emails
-            f'"{core}" contact email',
+            f'"{core}" "leadership team"',
         ]
 
         if domain:
             queries += [
-                f'site:{domain} "team"',
-                f'site:{domain} "about"',
-                f'site:{domain} contact',
+                f'site:{domain} team',
+                f'site:{domain} about',
                 f'"@{domain}"',
-                f'"{domain}" CEO',
             ]
 
         leaders, emails, results = [], [], []
@@ -122,49 +113,42 @@ class PowerOSINTFinder:
                     link = r["href"].lower()
                     title = r["title"]
                     body = r["body"]
-
                     combined = (title + " " + body).lower()
 
-                    # -------- SMART FILTERING --------
-                    if "linkedin.com/in" in link:
-                        signals = [
-                            core,
-                            domain if domain else "",
-                            core.replace("-", " "),
-                            core.replace(".", " "),
-                        ]
+                    # -------- SOURCE FILTER --------
+                    allowed_sources = [
+                        "linkedin.com",
+                        "crunchbase.com",
+                        "zoominfo.com",
+                        "rocketreach.co",
+                    ]
 
-                        if not any(sig and sig in combined for sig in signals):
-                            continue
-
-                    elif domain:
-                        # Allow useful external sources
-                        allowed_sources = [
-                            "linkedin.com",
-                            "crunchbase.com",
-                            "zoominfo.com",
-                            "rocketreach.co",
-                            domain
-                        ]
+                    if domain:
+                        allowed_sources.append(domain)
 
                     if not any(src in link for src in allowed_sources):
                         continue
 
-                    else:
-                        if core not in combined:
-                            continue
+                    # -------- REMOVE USELESS PAGES --------
+                    useless = [
+                        "patient", "treatment", "service",
+                        "blog", "category", "resource"
+                    ]
+
+                    if any(u in link for u in useless):
+                        continue
 
                     results.append({
                         "Title": title,
                         "Link": r["href"]
                     })
 
-                    # Emails
+                    # -------- EMAILS --------
                     found_emails = self.extract_emails(combined, domain)
                     for e in found_emails:
                         emails.append({"Email": e, "Source": "Search"})
 
-                    # Names
+                    # -------- LEADERS --------
                     name = self.extract_name(title, link)
                     if name:
                         leaders.append({
@@ -213,12 +197,15 @@ if st.button("Run Scan"):
             tab1, tab2, tab3 = st.tabs(["Leaders", "Emails", "Results"])
 
             with tab1:
+                st.subheader("Decision Makers")
                 st.dataframe(people, use_container_width=True)
 
             with tab2:
+                st.subheader("Emails")
                 st.dataframe(emails, use_container_width=True)
 
             with tab3:
+                st.subheader("Filtered Results")
                 st.dataframe(results, use_container_width=True)
 
             st.success("Scan complete")
