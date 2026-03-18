@@ -11,6 +11,7 @@ class PowerOSINTFinder:
     def __init__(self):
         self.ddgs = DDGS()
 
+    # -------- INPUT CLEAN --------
     def clean_input(self, user_input):
         user_input = user_input.strip()
 
@@ -22,37 +23,47 @@ class PowerOSINTFinder:
         domain = domain.replace("www.", "").lower()
 
         if "." in domain:
-            return domain.split('.')[0], domain
+            core = domain.split(".")[0]
+            return core, domain
         return user_input.lower(), None
 
+    # -------- NAME CLEAN --------
     def clean_name(self, name):
         words = name.split()
+
         if len(words) < 2 or len(words) > 4:
             return None
 
-        blacklist = ["linkedin", "profile", "company", "team"]
+        blacklist = ["linkedin", "profile", "company", "team", "jobs"]
         if any(b in name.lower() for b in blacklist):
             return None
 
         return name
 
-    def search_linkedin(self, core):
+    # -------- LINKEDIN SEARCH --------
+    def search_linkedin(self, core, domain):
         people = []
 
         queries = [
-            f'site:linkedin.com/in "{core}" founder',
-            f'site:linkedin.com/in "{core}" owner',
-            f'site:linkedin.com/in "{core}" director',
+            f'site:linkedin.com/in "{core}"',
         ]
 
         for q in queries:
             try:
-                results = list(self.ddgs.text(q, max_results=5))
+                results = list(self.ddgs.text(q, max_results=10))
 
                 for r in results:
                     title = r["title"]
+                    body = r["body"]
                     link = r["href"]
 
+                    combined = (title + " " + body).lower()
+
+                    # 🔥 BALANCED FILTER (not too strict, not dumb)
+                    if core not in combined:
+                        continue
+
+                    # Extract name
                     name = title.split("|")[0].split("-")[0].strip()
                     name = self.clean_name(name)
 
@@ -70,6 +81,7 @@ class PowerOSINTFinder:
 
         return people
 
+    # -------- EMAIL EXTRACTION --------
     def extract_emails(self, domain):
         emails = []
 
@@ -82,26 +94,32 @@ class PowerOSINTFinder:
             )
 
             for e in set(found):
-                emails.append({"Email": e, "Source": "Website"})
+                emails.append({
+                    "Email": e,
+                    "Source": "Website"
+                })
 
         except:
             pass
 
         return emails
 
+    # -------- MAIN RUN --------
     def run(self, target):
         core, domain = self.clean_input(target)
 
         leaders = []
         emails = []
 
-        # LinkedIn (basic but safe)
-        leaders.extend(self.search_linkedin(core))
+        # LinkedIn
+        linkedin_people = self.search_linkedin(core, domain)
+        leaders.extend(linkedin_people)
 
         # Emails
         if domain:
             emails.extend(self.extract_emails(domain))
 
+        # CLEAN DATA
         leaders_df = pd.DataFrame(leaders).drop_duplicates(subset=["Name"]) if leaders else pd.DataFrame()
         emails_df = pd.DataFrame(emails).drop_duplicates(subset=["Email"]) if emails else pd.DataFrame()
 
@@ -124,14 +142,16 @@ if st.button("Run Scan"):
             people, emails = engine.run(target)
 
         if people.empty and emails.empty:
-            st.warning("No results found")
+            st.warning("No relevant results found")
         else:
             tab1, tab2 = st.tabs(["Leaders", "Emails"])
 
             with tab1:
+                st.subheader("Relevant Profiles")
                 st.dataframe(people, use_container_width=True)
 
             with tab2:
+                st.subheader("Emails")
                 st.dataframe(emails, use_container_width=True)
 
             st.success("Scan complete")
