@@ -138,8 +138,17 @@ class PowerOSINTFinder:
                             continue
 
                     elif domain:
-                        if domain not in link:
-                            continue
+                        # Allow useful external sources
+                        allowed_sources = [
+                            "linkedin.com",
+                            "crunchbase.com",
+                            "zoominfo.com",
+                            "rocketreach.co",
+                            domain
+                        ]
+
+                    if not any(src in link for src in allowed_sources):
+                    continue
 
                     else:
                         if core not in combined:
