@@ -81,101 +81,93 @@ class PowerOSINTFinder:
             return []
 
     # -------- Main Recon --------
-        def run(self, target, hunter_api=None):
-    core, domain = self.clean_input(target)
+              # -------- Main Recon --------
+    def run(self, target, hunter_api=None):
+        core, domain = self.clean_input(target)
 
-    # 🔥 ADVANCED DORKS (LinkedIn + leadership + emails)
-    queries = [
-        # LinkedIn (primary for people)
-        f'site:linkedin.com/in "{core}"',
-        f'site:linkedin.com/in "{core}" (CEO OR Founder OR Director)',
-        f'site:linkedin.com/in "{core}" ("works at" OR "employee")',
+        queries = [
+            # LinkedIn
+            f'site:linkedin.com/in "{core}"',
+            f'site:linkedin.com/in "{core}" (CEO OR Founder OR Director)',
+            f'site:linkedin.com/in "{core}" ("works at" OR "employee")',
 
-        # Leadership
-        f'"{core}" CEO',
-        f'"{core}" founder',
-        f'"{core}" "leadership team"',
-        f'"{core}" "management team"',
+            # Leadership
+            f'"{core}" CEO',
+            f'"{core}" founder',
+            f'"{core}" "leadership team"',
+            f'"{core}" "management team"',
 
-        # Email discovery
-        f'"{core}" contact email',
-        f'"{core}" "@{core}.com"',
-    ]
-
-    if domain:
-        queries += [
-            # Website-specific
-            f'site:{domain} "team"',
-            f'site:{domain} "about"',
-            f'site:{domain} email',
-
-            # Domain-based dorks
-            f'"@{domain}"',
-            f'"{domain}" CEO',
-            f'"{domain}" founder',
+            # Email discovery
+            f'"{core}" contact email',
+            f'"{core}" "@{core}.com"',
         ]
 
-    leaders, emails, results = [], [], []
+        if domain:
+            queries += [
+                f'site:{domain} "team"',
+                f'site:{domain} "about"',
+                f'site:{domain} email',
+                f'"@{domain}"',
+                f'"{domain}" CEO',
+                f'"{domain}" founder',
+            ]
 
-    for q in queries:
-        try:
-            search_results = list(self.ddgs.text(q, max_results=10))
+        leaders, emails, results = [], [], []
 
-            for r in search_results:
-                link = r["href"].lower()
-                title = r["title"]
-                body = r["body"]
-                full_text = (title + " " + body).lower()
+        for q in queries:
+            try:
+                search_results = list(self.ddgs.text(q, max_results=10))
 
-                # 🔥 SMART FILTERING (THIS IS THE REAL FIX)
-                if "linkedin.com/in" in link:
-                    # Allow LinkedIn if company name is present
-                    if core not in full_text:
-                        continue
-                elif domain:
-                    # Strict for website
-                    if domain not in link:
-                        continue
-                else:
-                    # fallback
-                    if core not in full_text:
-                        continue
+                for r in search_results:
+                    link = r["href"].lower()
+                    title = r["title"]
+                    body = r["body"]
+                    full_text = (title + " " + body).lower()
 
-                results.append({
-                    "Title": title,
-                    "Link": r["href"]
-                })
+                    # SMART FILTERING
+                    if "linkedin.com/in" in link:
+                        if core not in full_text:
+                            continue
+                    elif domain:
+                        if domain not in link:
+                            continue
+                    else:
+                        if core not in full_text:
+                            continue
 
-                # Emails
-                found_emails = self.extract_emails(full_text, domain)
-                for e in found_emails:
-                    emails.append({"Email": e, "Source": "Search"})
-
-                # Names
-                name = self.extract_name(title, link)
-                if name:
-                    leaders.append({
-                        "Name": name,
-                        "Source": "LinkedIn",
+                    results.append({
+                        "Title": title,
                         "Link": r["href"]
                     })
 
-            time.sleep(1)
+                    # Emails
+                    found_emails = self.extract_emails(full_text, domain)
+                    for e in found_emails:
+                        emails.append({"Email": e, "Source": "Search"})
 
-        except:
-            continue
+                    # Names
+                    name = self.extract_name(title, link)
+                    if name:
+                        leaders.append({
+                            "Name": name,
+                            "Source": "LinkedIn",
+                            "Link": r["href"]
+                        })
 
-    # 🔥 API ENRICHMENT
-    if domain:
-        emails.extend(self.get_hunter_emails(domain, hunter_api))
+                time.sleep(1)
 
-    # Deduplicate
-    leaders_df = pd.DataFrame(leaders).drop_duplicates(subset=["Name"]) if leaders else pd.DataFrame()
-    emails_df = pd.DataFrame(emails).drop_duplicates(subset=["Email"]) if emails else pd.DataFrame()
-    results_df = pd.DataFrame(results).drop_duplicates(subset=["Link"]) if results else pd.DataFrame()
+            except:
+                continue
 
-    return leaders_df, emails_df, results_df
+        # API ENRICHMENT
+        if domain:
+            emails.extend(self.get_hunter_emails(domain, hunter_api))
 
+        leaders_df = pd.DataFrame(leaders).drop_duplicates(subset=["Name"]) if leaders else pd.DataFrame()
+        emails_df = pd.DataFrame(emails).drop_duplicates(subset=["Email"]) if emails else pd.DataFrame()
+        results_df = pd.DataFrame(results).drop_duplicates(subset=["Link"]) if results else pd.DataFrame()
+
+        return leaders_df, emails_df, results_df
 
 # ================= UI =================
 st.set_page_config(page_title="OSINT Power Finder", layout="wide")
