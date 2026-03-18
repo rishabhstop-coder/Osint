@@ -1,157 +1,118 @@
+from ddgs import DDGS
 import time
 import re
 import requests
 import pandas as pd
 import streamlit as st
 from urllib.parse import urlparse
-from ddgs import DDGS
-
 
 class PowerOSINTFinder:
     def __init__(self):
-        self.ddgs = DDGS()
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
 
-    # -------- INPUT CLEAN --------
+    # -------- HANDLES BOTH WAYS (google.com OR https://google.com) --------
     def clean_input(self, user_input):
-        user_input = user_input.strip()
-
-        if user_input.startswith(("http://", "https://")):
-            domain = urlparse(user_input).netloc
+        user_input = user_input.strip().lower()
+        
+        # Add protocol if missing to help urlparse
+        if not user_input.startswith(('http://', 'https://')) and "." in user_input:
+            temp_input = 'https://' + user_input
         else:
-            domain = user_input.split("/")[0]
+            temp_input = user_input
 
-        domain = domain.replace("www.", "").lower()
+        parsed = urlparse(temp_input)
+        domain = parsed.netloc if parsed.netloc else user_input
+        
+        # Remove www.
+        domain = domain.replace("www.", "")
+        
+        # Core name (e.g., 'google' from 'google.com')
+        core = domain.split(".")[0] if "." in domain else domain
+        
+        return core, domain
 
-        if "." in domain:
-            core = domain.split(".")[0]
-            return core, domain
-        return user_input.lower(), None
-
-    # -------- NAME CLEAN --------
-    def clean_name(self, name):
+    def clean_name(self, title):
+        # Cleans: "John Doe - CEO - Company Name | LinkedIn" -> "John Doe"
+        name = re.split(r'[-|–|—]', title)[0].strip()
         words = name.split()
-
-        if len(words) < 2 or len(words) > 4:
+        if len(words) < 2 or len(words) > 4 or "linkedin" in name.lower():
             return None
-
-        blacklist = ["linkedin", "profile", "company", "team", "jobs"]
-        if any(b in name.lower() for b in blacklist):
-            return None
-
         return name
 
-    # -------- LINKEDIN SEARCH --------
-    def search_linkedin(self, core, domain):
+    # -------- IMPROVED DORKING FOR DECISION MAKERS --------
+    def search_leaders(self, core, domain):
         people = []
-
+        # Target specific personas for pitching
+        roles = "(CEO OR Founder OR Director OR VP OR 'Marketing Manager')"
         queries = [
-            f'site:linkedin.com/in "{core}"',
+            f'site:linkedin.com/in/ "{core}" {roles}',
+            f'site:linkedin.com/in/ "{domain}" {roles}',
         ]
 
-        for q in queries:
-            try:
-                results = list(self.ddgs.text(q, max_results=10))
-
-                for r in results:
-                    title = r["title"]
-                    body = r["body"]
-                    link = r["href"]
-
-                    combined = (title + " " + body).lower()
-
-                    # 🔥 BALANCED FILTER (not too strict, not dumb)
-                    if core not in combined:
-                        continue
-
-                    # Extract name
-                    name = title.split("|")[0].split("-")[0].strip()
-                    name = self.clean_name(name)
-
-                    if name:
-                        people.append({
-                            "Name": name,
-                            "Source": "LinkedIn",
-                            "Link": link
-                        })
-
-                time.sleep(1)
-
-            except:
-                continue
-
+        with DDGS() as ddgs:
+            for q in queries:
+                try:
+                    results = ddgs.text(q, max_results=15)
+                    for r in results:
+                        title = r.get("title", "")
+                        href = r.get("href", "")
+                        
+                        name = self.clean_name(title)
+                        if name and "profiles" not in href:
+                            people.append({
+                                "Name": name,
+                                "Role/Context": title.replace(" | LinkedIn", ""),
+                                "Link": href
+                            })
+                    time.sleep(1.5)
+                except Exception as e:
+                    st.error(f"Search error: {e}")
         return people
 
-    # -------- EMAIL EXTRACTION --------
     def extract_emails(self, domain):
         emails = []
-
+        if "." not in domain: return emails
+        
         try:
-            res = requests.get(f"https://{domain}", timeout=5)
-
-            found = re.findall(
-                r"[a-zA-Z0-9._%+-]+@" + re.escape(domain),
-                res.text
-            )
-
+            # Try to scrape the homepage for exposed emails
+            res = requests.get(f"https://{domain}", headers=self.headers, timeout=5)
+            found = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', res.text)
             for e in set(found):
-                emails.append({
-                    "Email": e,
-                    "Source": "Website"
-                })
-
+                if domain in e.lower(): # Only keep company-specific emails
+                    emails.append({"Email": e, "Source": "Website Scrape"})
         except:
             pass
-
         return emails
 
-    # -------- MAIN RUN --------
     def run(self, target):
         core, domain = self.clean_input(target)
-
-        leaders = []
-        emails = []
-
-        # LinkedIn
-        linkedin_people = self.search_linkedin(core, domain)
-        leaders.extend(linkedin_people)
-
-        # Emails
-        if domain:
-            emails.extend(self.extract_emails(domain))
-
-        # CLEAN DATA
-        leaders_df = pd.DataFrame(leaders).drop_duplicates(subset=["Name"]) if leaders else pd.DataFrame()
-        emails_df = pd.DataFrame(emails).drop_duplicates(subset=["Email"]) if emails else pd.DataFrame()
-
-        return leaders_df, emails_df
-
+        st.write(f"🔍 **Targeting:** {core} | **Domain:** {domain}")
+        
+        people = self.search_leaders(core, domain)
+        emails = self.extract_emails(domain)
+        
+        df_people = pd.DataFrame(people).drop_duplicates(subset=["Name"]) if people else pd.DataFrame()
+        df_emails = pd.DataFrame(emails).drop_duplicates(subset=["Email"]) if emails else pd.DataFrame()
+        
+        return df_people, df_emails
 
 # ================= UI =================
-st.set_page_config(page_title="OSINT Power Finder", layout="wide")
+st.set_page_config(page_title="Decision Maker Finder", layout="wide")
+st.title("🚀 Decision Maker & Lead Finder")
 
-st.title("🔎 OSINT Power Finder")
+target = st.text_input("Enter Company Name or URL (e.g. google.com or Google)")
 
-target = st.text_input("Enter Company or Domain")
-
-if st.button("Run Scan"):
-    if not target:
-        st.error("Enter a target")
+if st.button("Find Decision Makers"):
+    if target:
+        finder = PowerOSINTFinder()
+        people_df, emails_df = finder.run(target)
+        
+        t1, t2 = st.tabs(["👥 Decision Makers", "📧 Emails Found"])
+        with t1:
+            st.dataframe(people_df, use_container_width=True)
+        with t2:
+            st.dataframe(emails_df, use_container_width=True)
     else:
-        with st.spinner("Scanning..."):
-            engine = PowerOSINTFinder()
-            people, emails = engine.run(target)
-
-        if people.empty and emails.empty:
-            st.warning("No relevant results found")
-        else:
-            tab1, tab2 = st.tabs(["Leaders", "Emails"])
-
-            with tab1:
-                st.subheader("Relevant Profiles")
-                st.dataframe(people, use_container_width=True)
-
-            with tab2:
-                st.subheader("Emails")
-                st.dataframe(emails, use_container_width=True)
-
-            st.success("Scan complete")
+        st.warning("Please enter a target first.")
