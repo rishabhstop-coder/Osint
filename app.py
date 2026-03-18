@@ -24,11 +24,12 @@ class PowerOSINTFinder:
         domain = domain.replace("www.", "").lower()
 
         if "." in domain:
-            return domain.split('.')[0], domain
+            core = domain.split('.')[0]
+            return core, domain
         else:
             return user_input.lower(), None
 
-    # -------- Validation --------
+    # -------- Name Validation --------
     def is_valid_name(self, name):
         if not name:
             return False
@@ -39,9 +40,8 @@ class PowerOSINTFinder:
             return False
 
         blacklist = [
-            "linkedin", "profile", "company",
-            "team", "jobs", "hiring",
-            "about", "contact", "activities"
+            "linkedin", "profile", "company", "team",
+            "jobs", "hiring", "about", "contact"
         ]
 
         return not any(b in name.lower() for b in blacklist)
@@ -58,14 +58,14 @@ class PowerOSINTFinder:
 
     # -------- Name Extraction --------
     def extract_name(self, title, link):
-        if "linkedin.com/in" not in link.lower():
+        if "linkedin.com/in" not in link:
             return None
 
         name = title.split("|")[0].split("-")[0].strip()
 
         return name if self.is_valid_name(name) else None
 
-    # -------- Hunter API (optional) --------
+    # -------- Hunter API --------
     def get_hunter_emails(self, domain, api_key=None):
         if not api_key:
             return []
@@ -74,22 +74,24 @@ class PowerOSINTFinder:
             url = f"https://api.hunter.io/v2/domain-search?domain={domain}&api_key={api_key}"
             res = requests.get(url, timeout=5).json()
 
-            emails = res.get("data", {}).get("emails", [])
-
-            return [{"Email": e["value"], "Source": "Hunter"} for e in emails]
+            return [
+                {"Email": e["value"], "Source": "Hunter"}
+                for e in res.get("data", {}).get("emails", [])
+            ]
         except:
             return []
 
-    # -------- Main Recon --------
-              # -------- Main Recon --------
+    # -------- MAIN ENGINE --------
     def run(self, target, hunter_api=None):
         core, domain = self.clean_input(target)
 
+        # 🔥 SMART QUERIES
         queries = [
-            # LinkedIn
-            f'site:linkedin.com/in "{core}"',
-            f'site:linkedin.com/in "{core}" (CEO OR Founder OR Director)',
-            f'site:linkedin.com/in "{core}" ("works at" OR "employee")',
+            # LinkedIn (strong signals)
+            f'site:linkedin.com/in "{core}" "works at"',
+            f'site:linkedin.com/in "{core}" "company"',
+            f'site:linkedin.com/in "{core}" CEO',
+            f'site:linkedin.com/in "{core}" founder',
 
             # Leadership
             f'"{core}" CEO',
@@ -97,19 +99,17 @@ class PowerOSINTFinder:
             f'"{core}" "leadership team"',
             f'"{core}" "management team"',
 
-            # Email discovery
+            # Emails
             f'"{core}" contact email',
-            f'"{core}" "@{core}.com"',
         ]
 
         if domain:
             queries += [
                 f'site:{domain} "team"',
                 f'site:{domain} "about"',
-                f'site:{domain} email',
+                f'site:{domain} contact',
                 f'"@{domain}"',
                 f'"{domain}" CEO',
-                f'"{domain}" founder',
             ]
 
         leaders, emails, results = [], [], []
@@ -122,17 +122,27 @@ class PowerOSINTFinder:
                     link = r["href"].lower()
                     title = r["title"]
                     body = r["body"]
-                    full_text = (title + " " + body).lower()
 
-                    # SMART FILTERING
+                    combined = (title + " " + body).lower()
+
+                    # -------- SMART FILTERING --------
                     if "linkedin.com/in" in link:
-                        if core not in full_text:
+                        signals = [
+                            core,
+                            domain if domain else "",
+                            core.replace("-", " "),
+                            core.replace(".", " "),
+                        ]
+
+                        if not any(sig and sig in combined for sig in signals):
                             continue
+
                     elif domain:
                         if domain not in link:
                             continue
+
                     else:
-                        if core not in full_text:
+                        if core not in combined:
                             continue
 
                     results.append({
@@ -141,7 +151,7 @@ class PowerOSINTFinder:
                     })
 
                     # Emails
-                    found_emails = self.extract_emails(full_text, domain)
+                    found_emails = self.extract_emails(combined, domain)
                     for e in found_emails:
                         emails.append({"Email": e, "Source": "Search"})
 
@@ -159,15 +169,17 @@ class PowerOSINTFinder:
             except:
                 continue
 
-        # API ENRICHMENT
+        # -------- API ENRICHMENT --------
         if domain:
             emails.extend(self.get_hunter_emails(domain, hunter_api))
 
+        # -------- CLEAN OUTPUT --------
         leaders_df = pd.DataFrame(leaders).drop_duplicates(subset=["Name"]) if leaders else pd.DataFrame()
         emails_df = pd.DataFrame(emails).drop_duplicates(subset=["Email"]) if emails else pd.DataFrame()
         results_df = pd.DataFrame(results).drop_duplicates(subset=["Link"]) if results else pd.DataFrame()
 
         return leaders_df, emails_df, results_df
+
 
 # ================= UI =================
 st.set_page_config(page_title="OSINT Power Finder", layout="wide")
@@ -192,15 +204,12 @@ if st.button("Run Scan"):
             tab1, tab2, tab3 = st.tabs(["Leaders", "Emails", "Results"])
 
             with tab1:
-                st.subheader("Leadership")
                 st.dataframe(people, use_container_width=True)
 
             with tab2:
-                st.subheader("Emails")
                 st.dataframe(emails, use_container_width=True)
 
             with tab3:
-                st.subheader("Search Results")
                 st.dataframe(results, use_container_width=True)
 
             st.success("Scan complete")
